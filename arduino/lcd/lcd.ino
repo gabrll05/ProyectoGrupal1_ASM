@@ -1,55 +1,69 @@
 #include <SPI.h>
 #include <LiquidCrystal.h>
 
-LiquidCrystal lcd(2, 3, 4, 5, 6, 7);
+LiquidCrystal lcd(2,3,4,5,6,7);
 
-#define BUFFER_SIZE 32
+#define BINS 16
 
-volatile char buffer[BUFFER_SIZE];
-volatile byte head = 0;
-volatile byte tail = 0;
+volatile byte data;
+volatile bool flag = false;
 
-byte col = 0;
+byte spectrum[BINS];
+byte index = 0;
+
+byte bars[8][8] = {
+  {0,0,0,0,0,0,0,0},
+  {0,0,0,0,0,0,0,31},
+  {0,0,0,0,0,0,31,31},
+  {0,0,0,0,0,31,31,31},
+  {0,0,0,0,31,31,31,31},
+  {0,0,0,31,31,31,31,31},
+  {0,0,31,31,31,31,31,31},
+  {0,31,31,31,31,31,31,31}
+};
 
 void setup() {
-  Serial.begin(115200);
-
-  lcd.begin(16, 2);
-  lcd.clear();
-
+  lcd.begin(16,2);
+  for (int i = 0; i < 8; i++) {
+    lcd.createChar(i, bars[i]);
+  }
   pinMode(MISO, OUTPUT);
   pinMode(10, INPUT_PULLUP);
-
   SPCR = _BV(SPE);
   SPI.attachInterrupt();
 }
 
 ISR(SPI_STC_vect) {
-  char c = SPDR;
-
-  byte next = (head + 1) % BUFFER_SIZE;
-
-  if (next != tail) {
-    buffer[head] = c;
-    head = next;
-  }
+  data = SPDR;
+  flag = true;
 }
 
 void loop() {
-  while (tail != head) {
-    char c = buffer[tail];
-    tail = (tail + 1) % BUFFER_SIZE;
+  if (flag) {
+    spectrum[index++] = data;
 
-    Serial.write(c);
+    if (index >= BINS) {
+      index = 0;
 
-    lcd.setCursor(col, 0);
-    lcd.write(c);
+      byte maxVal = 1;
+      for (int i = 0; i < 16; i++) {
+        if (spectrum[i] > maxVal) maxVal = spectrum[i];
+      }
 
-    col++;
+      for (int i = 0; i < 16; i++) {
+        byte level = (spectrum[i] * 15) / maxVal;
 
-    if (col >= 16) {
-      col = 0;
-      lcd.clear();
+        byte bottom = min(level, 7);
+        byte top = (level > 7) ? (level - 7) : 0;
+
+        lcd.setCursor(i, 1);
+        lcd.write(bottom);
+
+        lcd.setCursor(i, 0);
+        lcd.write(top);
+      }
     }
+
+    flag = false;
   }
 }
