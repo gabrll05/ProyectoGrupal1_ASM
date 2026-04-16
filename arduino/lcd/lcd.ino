@@ -1,26 +1,55 @@
 #include <SPI.h>
+#include <LiquidCrystal.h>
 
-volatile byte data;
-volatile bool flag = false;
+LiquidCrystal lcd(2, 3, 4, 5, 6, 7);
+
+#define BUFFER_SIZE 32
+
+volatile char buffer[BUFFER_SIZE];
+volatile byte head = 0;
+volatile byte tail = 0;
+
+byte col = 0;
 
 void setup() {
   Serial.begin(115200);
 
-  pinMode(MISO, OUTPUT);
-  pinMode(10, INPUT_PULLUP); // SS estable
+  lcd.begin(16, 2);
+  lcd.clear();
 
-  SPCR = _BV(SPE);           // habilitar SPI
+  pinMode(MISO, OUTPUT);
+  pinMode(10, INPUT_PULLUP);
+
+  SPCR = _BV(SPE);
   SPI.attachInterrupt();
 }
 
 ISR(SPI_STC_vect) {
-  data = SPDR;
-  flag = true;
+  char c = SPDR;
+
+  byte next = (head + 1) % BUFFER_SIZE;
+
+  if (next != tail) {
+    buffer[head] = c;
+    head = next;
+  }
 }
 
 void loop() {
-  if (flag) {
-    Serial.write(data);
-    flag = false;
+  while (tail != head) {
+    char c = buffer[tail];
+    tail = (tail + 1) % BUFFER_SIZE;
+
+    Serial.write(c);
+
+    lcd.setCursor(col, 0);
+    lcd.write(c);
+
+    col++;
+
+    if (col >= 16) {
+      col = 0;
+      lcd.clear();
+    }
   }
 }
