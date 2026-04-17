@@ -1,12 +1,35 @@
 import serial
 import time
-import random
+import numpy as np
+import librosa
 
-ser = serial.Serial('/dev/serial/by-id/usb-Arduino_LLC_Arduino_Leonardo-if00', 115200)
+PORT = '/dev/ttyACM0'
+BAUD = 115200
+BLOCK = 32
+
+ser = serial.Serial(PORT, BAUD, timeout=1)
 time.sleep(2)
 
+audio_raw, _ = librosa.load("audio/song2.wav", sr=8000, mono=True)
+
+audio = audio_raw / np.max(np.abs(audio_raw))
+audio = (audio * 80 + 127).astype(np.uint8)
+
+i = 0
+
 while True:
-    for _ in range(32):
-        val = 127 + random.randint(-60, 60)  # ruido centrado en 127
-        ser.write(bytes([val & 0xFF]))
-        time.sleep(0.003)
+    block = audio[i:i+BLOCK]
+
+    if len(block) < BLOCK:
+        i = 0
+        continue
+    
+    ser.write(block.tobytes())
+    
+
+    while True:
+        if ser.in_waiting:
+            if ser.read() == b'K':
+                break
+
+    i += BLOCK
