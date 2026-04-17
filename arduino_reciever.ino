@@ -1,103 +1,88 @@
-import serial
-import time
-import numpy as np
-import librosa
+#include <Arduino.h>
+#include "arduinoFFT.h"
 
-# --- CONFIGURACIÓN ---
-N = 64  # Tamaño de los datos
-PUERTO = 'COM6'
-BAUD = 10000
-SAMPLERATE = 8000
-HEADER = 0xAA
-FOOTER = 0x55
+/* --- CONSTANTES DE COMUNICACIÓN --- */
+#define N 64                 // Tamaño de cada bloque de datos recibido
+#define N_FFT 66             // Tamaño total del buffer para procesamiento
+#define HEADER_A 0xAA         // Marcador de inicio de trama
+#define HEADER_B 0xAB         
+#define FOOTER 0x55           
+#define SAMPLE_PERIOD 125     
+#define BAUD_RATE_PC 10000  
 
-# --- FLAGS ---
-GET = b'G'  # Orden del ESP32 para pedir un bloque
-ACKNOWLEDGE = b'A' # Orden del ESP32 para indicar que el bloque fue recibido correctamente
-START = b'S' # Orden del PC para iniciar la sincronización
-ERROR = b'E' # Orden del ESP32 para indicar que hubo un error en la trama
-OK = b'K' # Orden del ESP32 para indicar que la trama fue recibida correctamente
+/* --- CONSTANTES DE CONTROL --- */
+#define ACK_SIGNAL 'K'   
+#define GET 'G'          
+#define ERROR 'E'        
+#define START 'S'        
+#define ACKNOWLEDGE 'A'  
 
+/* --- VARIABLES GLOBALES --- */
+uint8_t buffer[N];            
+uint8_t FFT_buffer[N_FFT];    
+int block_counter = 0;        
 
+/* --- VARIABLES FFT --- */
+float vReal[N_FFT];
+float vImag[N_FFT];
+ArduinoFFT<float> FFT = ArduinoFFT<float>(vReal, vImag, N_FFT, 8000);
 
+void setup() {
+  // En Leonardo, Serial.begin() no depende del baudrate físico por ser USB nativo,
+  // pero se mantiene por estructura.
+  Serial.begin(BAUD_RATE_PC);
+  
+  // Esperar a que el puerto serial USB esté listo (específico de Leonardo)
+  while (!Serial); 
 
-def transmitir(muestras, tam_bloque):
-    # Configuración del puerto
-    # Nota: El timeout se pone en None para que espere pacientemente la orden del ESP
-    ser = serial.Serial(PUERTO, BAUD, timeout=None) 
-    time.sleep(2)  # Esperar a que el ESP32 se reinicie tras abrir el puerto
-    ser.reset_input_buffer()
-    ser.reset_output_buffer()
+  // --- HANDSHAKE INICIAL ---
+  while (true) {
+    if (Serial.available() > 0 && Serial.read() == START) {
+      Serial.write(ACKNOWLEDGE);
+      break;
+    }
+  }
+}
+void loop() {
+  // 1. LIMPIAR BUFFER Y SOLICITAR BLOQUE
+  while(Serial.available() > 0) Serial.read(); 
+  Serial.write(GET);
+
+  // 2. ESPERAR HASTA QUE LLEGUE AL MENOS EL HEADER
+  uint32_t t_espera = millis();
+  while (Serial.available() == 0) { 
+    if (millis() - t_espera > 1) { // Timeout reducido para mayor fluidez
+      Serial.write(GET); 
+      t_espera = millis();
+    }
+  }
+
+  // 3. PROCESAR LA TRAMA EN CUANTO LLEGA EL PRIMER BYTE
+  if (Serial.read() == HEADER_A) {
     
-    print("Sincronizando con Tarjeta 1...")
-    # --- HANDSHAKE INICIAL ---
-    while True:
-        ser.write(START)
-        if ser.read(1) == ACKNOWLEDGE:
-            print("Sincronización exitosa. Esperando peticiones de bloques...")
-            break
-        time.sleep(0.1)
-
-    total = len(muestras)
-    num_bloques = int(np.ceil(total / tam_bloque))
+    // Serial.readBytes es eficiente: espera hasta que lleguen N bytes 
+    // o hasta que se cumpla el Serial.setTimeout()
+    Serial.readBytes(buffer, N);
     
-    i = 0
-    while i < num_bloques:
-        # 1. ESPERAR LA ORDEN 'G' (DAME BLOQUE) DEL ESP32
-        # El script se detiene aquí hasta que la Tarjeta 1 esté lista
-        orden = ser.read(1)
-        
-        if orden == GET:
-            # Preparar el bloque actual
-            inicio = i * tam_bloque
-            bloque = muestras[inicio:inicio+tam_bloque]
-            
-            # Padding si es el último bloque
-            if len(bloque) < tam_bloque:
-                bloque = np.pad(bloque, (0, tam_bloque - len(bloque)), 'constant', constant_values=127)
-            
-            # --- EMPAQUETADO ---
-            # Header (0xAA) + Datos + Footer (0x55)
-            trama = bytearray([HEADER]) + bloque.tobytes() + bytearray([FOOTER])
-            
-            # 2. ENVIAR LA TRAMA
-            ser.write(trama)
-            
-            # Feedback de progreso
-            if True:
-                print(f"Enviando bloque {i}/{num_bloques} - Progreso: {(i/num_bloques)*100:.1f}%", end='\r')
-            
-            i += 1 # Avanzar al siguiente bloque solo después de enviarlo
-        
-        elif orden == ERROR:
-            # Si el ESP32 detectó un error en la trama anterior, lo notificamos
-            # Opcional: Podrías NO incrementar 'i' para que se reintente el mismo bloque
-            print(f"\n[!] El ESP32 reportó error de sincronía en el bloque {i-1}")
-        
-        else:
-            # Si llega cualquier otra cosa (ruido), simplemente seguimos esperando un 'G'
-            continue
+    // Verificar que el cierre de trama sea correcto
+    if (Serial.read() == FOOTER) {
+      
+      // Llenar buffer para procesamiento
+      for (int i = 0; i < N; i++) {
+        vReal[i] = (float)buffer[i];
+        vImag[i] = 0.0;
+      }
 
-    ser.close()
-    print("\n\nTransmisión finalizada con éxito.")
+      // --- ESPACIO PARA PROCESAMIENTO MATEMÁTICO ---
+      block_counter = 0; 
 
-# Carga el archivo con una frecuencia de muestreo específica (8000Hz)
-# Librosa devuelve 'audio' como un array de floats entre -1.0 y 1.0
-audio_raw, _ = librosa.load("Audio/dembow_mieo.mp3", sr=SAMPLERATE, mono=True)
-
-# Restamos el valor mínimo para que el punto más bajo sea exactamente 0
-# Ahora todos los valores de la canción son positivos
-audio_positivo = audio_raw - audio_raw.min()
-
-# Dividimos por el nuevo máximo para que el rango sea de 0.0 a 1.0
-audio_normalizado = audio_positivo / audio_positivo.max()
-
-# Multiplicamos por 150 para definir el "techo" de volumen (de 255 posibles)
-audio_escalado = audio_normalizado * 150
-
-# Convertimos de float a unsigned integer de 8 bits (0-255)
-# Esto es lo que finalmente viajará al ESP32
-data = audio_escalado.astype(np.uint8)
-
-
-transmitir(data, N)
+    } else {
+      // Si el footer no está, informamos el error
+      Serial.write(ERROR);
+      while(Serial.available()) Serial.read(); 
+    }
+  } else {
+    // Si lo primero que llegó no fue el HEADER, limpiamos basura
+    while(Serial.available() && Serial.peek() != HEADER_A) Serial.read();
+  }
+}
