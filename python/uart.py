@@ -10,7 +10,7 @@ BLOCK = 32
 ser = serial.Serial(PORT, BAUD, timeout=1)
 time.sleep(2)
 
-audio_raw, _ = librosa.load("audio/song2.wav", sr=8000, mono=True)
+audio_raw, _ = librosa.load("audio/song1.wav", sr=8000, mono=True)
 
 audio = audio_raw / np.max(np.abs(audio_raw))
 audio = (audio * 80 + 127).astype(np.uint8)
@@ -25,7 +25,6 @@ while True:
         continue
     
     ser.write(block.tobytes())
-    
 
     while True:
         if ser.in_waiting:

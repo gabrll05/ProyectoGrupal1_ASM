@@ -1,23 +1,31 @@
 #include <SPI.h>
+#include <arduinoFFT.h>
 #include <math.h>
 
+#define N 32
+#define K 3
 #define PWM_PIN 9
+
+double vReal[N];
+double vImag[N];
+
+ArduinoFFT<double> FFT(vReal, vImag, N, 8000);
 
 volatile byte data;
 volatile bool flag = false;
 
-byte buffer[6];
+byte buffer[K * 5];
 byte idx = 0;
 
-float freq[3] = {0,0,0};
-float amp[3] = {0,0,0};
-float phase[3] = {0,0,0};
+float audioBuffer[N];
+int audioIndex = 0;
 
 void setup() {
   pinMode(MISO, OUTPUT);
   pinMode(10, INPUT_PULLUP);
   pinMode(PWM_PIN, OUTPUT);
 
+  // PWM rápido
   TCCR1B = TCCR1B & 0b11111000 | 0x01;
 
   SPCR = _BV(SPE);
@@ -31,37 +39,61 @@ ISR(SPI_STC_vect) {
 
 void loop() {
 
+  // recepción SPI
   while (flag) {
     buffer[idx++] = data;
 
-    if (idx >= 6) {
+    if (idx >= K * 5) {
       idx = 0;
 
-      for (int i = 0; i < 3; i++) {
-        freq[i] = buffer[i*2] * 15.0;
-        amp[i]  = buffer[i*2 + 1] / 255.0;
+      // limpiar espectro
+      for (int i = 0; i < N; i++) {
+        vReal[i] = 0;
+        vImag[i] = 0;
+      }
+
+      // reconstruir con fase
+      for (int i = 0; i < K; i++) {
+
+        int base = i * 5;
+
+        int k = buffer[base];
+
+        int16_t real = (buffer[base+1] << 8) | buffer[base+2];
+        int16_t imag = (buffer[base+3] << 8) | buffer[base+4];
+
+        vReal[k] = real;
+        vImag[k] = imag;
+
+        if (k > 0 && k < N) {
+          vReal[N-k] = real;
+          vImag[N-k] = -imag;
+        }
+      }
+
+      // IFFT
+      FFT.compute(FFTDirection::Reverse);
+
+      for (int i = 0; i < N; i++) {
+        audioBuffer[i] = vReal[i] / N;
       }
     }
 
     flag = false;
   }
 
-  float sample = 0;
+  // reproducción continua
+  float sample = audioBuffer[audioIndex];
 
-  for (int i = 0; i < 3; i++) {
-    sample += amp[i] * 40 * sin(phase[i]);
-  }
-
-  int pwm = (int)(127 + sample);
+  int pwm = (int)(sample * 2 + 127);
 
   if (pwm < 0) pwm = 0;
   if (pwm > 255) pwm = 255;
 
   analogWrite(PWM_PIN, pwm);
 
-  for (int i = 0; i < 3; i++) {
-    phase[i] += 2 * PI * freq[i] / 8000.0;
-  }
+  audioIndex++;
+  if (audioIndex >= N) audioIndex = 0;
 
-  delayMicroseconds(60);
+  delayMicroseconds(125);
 }
