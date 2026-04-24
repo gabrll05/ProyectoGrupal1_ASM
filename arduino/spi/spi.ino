@@ -10,8 +10,8 @@ ArduinoFFT<double> FFT(vReal, vImag, N, 8000);
 int index = 0;
 
 void setup() {
-  Serial.begin(115200);   // PC
-  Serial1.begin(115200);  // ESP
+  Serial.begin(115200);
+  Serial1.begin(115200);
 }
 
 void loop() {
@@ -27,22 +27,25 @@ void loop() {
       FFT.windowing(FFTWindow::Hamming, FFTDirection::Forward);
       FFT.compute(FFTDirection::Forward);
 
-      for (int i = 1; i < N/2; i++) {
+     
+    for (int i = 1; i < N/2; i++) {
 
-        int16_t mag = (int16_t)vReal[i];
-        int16_t phase = (int16_t)vImag[i];
+  float gain = 1.0 / (1.0 + 0.5 * i); 
 
-        Serial1.write(highByte(mag));
-        Serial1.write(lowByte(mag));
-        Serial1.write(highByte(phase));
-        Serial1.write(lowByte(phase));
-      }
+  vReal[i] *= gain;
+  vImag[i] *= gain;
 
-      // esperar ACK del ESP
+  int16_t real = (int16_t)(vReal[i] * 8);
+  int16_t imag = (int16_t)(vImag[i] * 8);
+
+  Serial1.write(highByte(real));
+  Serial1.write(lowByte(real));
+  Serial1.write(highByte(imag));
+  Serial1.write(lowByte(imag));
+}
+
       while (!Serial1.available());
-      if (Serial1.read() == 'K') {
-        // ok
-      }
+      Serial1.read();
     }
   }
 }

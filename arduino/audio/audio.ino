@@ -4,36 +4,37 @@
 double vReal[N];
 double vImag[N];
 
-int idx = 0;
+int idx = 1;
 
 void setup() {
   Serial.begin(115200);
-  pinMode(AUDIO_PIN, OUTPUT);
+
+  analogWriteRange(255);
+  analogWriteFreq(20000); 
 }
 
 void loop() {
 
   if (Serial.available() >= 4) {
 
-    int16_t mag = (Serial.read() << 8) | Serial.read();
-    int16_t phase = (Serial.read() << 8) | Serial.read();
+    int16_t real = (Serial.read() << 8) | Serial.read();
+    int16_t imag = (Serial.read() << 8) | Serial.read();
 
-    vReal[idx] = mag;
-    vImag[idx] = phase;
+    vReal[idx] = real;
+    vImag[idx] = imag;
 
     idx++;
 
-    if (idx >= (N/2 - 1)) {
-      idx = 0;
+    if (idx >= N/2) {
+      idx = 1;
 
-      // reconstruir DC y Nyquist
+      // reconstrucción simétrica
       vReal[0] = 0; vImag[0] = 0;
       vReal[N/2] = 0; vImag[N/2] = 0;
 
-      // espejo complejo
       for (int i = 1; i < N/2; i++) {
-        vReal[N - i] = vReal[i];
-        vImag[N - i] = -vImag[i];
+        vReal[N-i] = vReal[i];
+        vImag[N-i] = -vImag[i];
       }
 
       // IFFT
@@ -42,7 +43,7 @@ void loop() {
 
         for (int n = 0; n < N; n++) {
           double angle = 2 * PI * k * n / N;
-          sum += vReal[n] * cos(angle) - vImag[n] * sin(angle);
+          sum += vReal[n]*cos(angle) - vImag[n]*sin(angle);
         }
 
         int out = (int)(sum / N) + 127;
@@ -52,7 +53,6 @@ void loop() {
         delayMicroseconds(125);
       }
 
-      // ACK
       Serial.write('K');
     }
   }
