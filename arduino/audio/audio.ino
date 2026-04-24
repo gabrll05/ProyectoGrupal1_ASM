@@ -1,99 +1,59 @@
-#include <SPI.h>
-#include <arduinoFFT.h>
-#include <math.h>
-
 #define N 32
-#define K 3
-#define PWM_PIN 9
+#define AUDIO_PIN D2
 
 double vReal[N];
 double vImag[N];
 
-ArduinoFFT<double> FFT(vReal, vImag, N, 8000);
-
-volatile byte data;
-volatile bool flag = false;
-
-byte buffer[K * 5];
-byte idx = 0;
-
-float audioBuffer[N];
-int audioIndex = 0;
+int idx = 0;
 
 void setup() {
-  pinMode(MISO, OUTPUT);
-  pinMode(10, INPUT_PULLUP);
-  pinMode(PWM_PIN, OUTPUT);
-
-  // PWM rápido
-  TCCR1B = TCCR1B & 0b11111000 | 0x01;
-
-  SPCR = _BV(SPE);
-  SPI.attachInterrupt();
-}
-
-ISR(SPI_STC_vect) {
-  data = SPDR;
-  flag = true;
+  Serial.begin(115200);
+  pinMode(AUDIO_PIN, OUTPUT);
 }
 
 void loop() {
 
-  // recepción SPI
-  while (flag) {
-    buffer[idx++] = data;
+  if (Serial.available() >= 4) {
 
-    if (idx >= K * 5) {
+    int16_t mag = (Serial.read() << 8) | Serial.read();
+    int16_t phase = (Serial.read() << 8) | Serial.read();
+
+    vReal[idx] = mag;
+    vImag[idx] = phase;
+
+    idx++;
+
+    if (idx >= (N/2 - 1)) {
       idx = 0;
 
-      // limpiar espectro
-      for (int i = 0; i < N; i++) {
-        vReal[i] = 0;
-        vImag[i] = 0;
-      }
+      // reconstruir DC y Nyquist
+      vReal[0] = 0; vImag[0] = 0;
+      vReal[N/2] = 0; vImag[N/2] = 0;
 
-      // reconstruir con fase
-      for (int i = 0; i < K; i++) {
-
-        int base = i * 5;
-
-        int k = buffer[base];
-
-        int16_t real = (buffer[base+1] << 8) | buffer[base+2];
-        int16_t imag = (buffer[base+3] << 8) | buffer[base+4];
-
-        vReal[k] = real;
-        vImag[k] = imag;
-
-        if (k > 0 && k < N) {
-          vReal[N-k] = real;
-          vImag[N-k] = -imag;
-        }
+      // espejo complejo
+      for (int i = 1; i < N/2; i++) {
+        vReal[N - i] = vReal[i];
+        vImag[N - i] = -vImag[i];
       }
 
       // IFFT
-      FFT.compute(FFTDirection::Reverse);
+      for (int k = 0; k < N; k++) {
+        double sum = 0;
 
-      for (int i = 0; i < N; i++) {
-        audioBuffer[i] = vReal[i] / N;
+        for (int n = 0; n < N; n++) {
+          double angle = 2 * PI * k * n / N;
+          sum += vReal[n] * cos(angle) - vImag[n] * sin(angle);
+        }
+
+        int out = (int)(sum / N) + 127;
+        out = constrain(out, 0, 255);
+
+        analogWrite(AUDIO_PIN, out);
+        delayMicroseconds(125);
       }
+
+      // ACK
+      Serial.write('K');
     }
-
-    flag = false;
   }
-
-  // reproducción continua
-  float sample = audioBuffer[audioIndex];
-
-  int pwm = (int)(sample * 2 + 127);
-
-  if (pwm < 0) pwm = 0;
-  if (pwm > 255) pwm = 255;
-
-  analogWrite(PWM_PIN, pwm);
-
-  audioIndex++;
-  if (audioIndex >= N) audioIndex = 0;
-
-  delayMicroseconds(125);
 }
