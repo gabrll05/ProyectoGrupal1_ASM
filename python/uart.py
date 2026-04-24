@@ -6,7 +6,7 @@ PORT = '/dev/ttyACM0'
 BAUD = 115200
 SR = 8000
 BLOCK = 32
-FREQ = 200
+FREQ = 2000
 
 ser = serial.Serial(PORT, BAUD, timeout=1)
 time.sleep(2)

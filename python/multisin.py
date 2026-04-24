@@ -7,10 +7,10 @@ BAUD = 115200
 SR = 8000
 BLOCK = 32
 
-# frecuencias separadas (bins distintos)
+
 F1 = 250
 F2 = 750
-F3 = 1250
+F3 = 2250
 
 ser = serial.Serial(PORT, BAUD, timeout=1)
 time.sleep(2)
@@ -22,11 +22,11 @@ def gen_multi(duration):
         np.sin(2 * np.pi * F1 * t) +
         np.sin(2 * np.pi * F2 * t) +
         np.sin(2 * np.pi * F3 * t)
-    ) / 3.0  # normalizar
+    ) / 3.0
 
     return (wave * 40 + 127).astype(np.uint8)
 
-audio = gen_multi(5)  # 5 segundos
+audio = gen_multi(5)  
 
 i = 0
 

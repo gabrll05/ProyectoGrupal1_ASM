@@ -22,8 +22,57 @@ int bytePhase = 0;
 int bin_i = 0;
 int16_t temp = 0;
 
+// ===== caracteres personalizados =====
+byte levels[8][8] = {
+  {0,0,0,0,0,0,0,0},
+  {0,0,0,0,0,0,0,31},
+  {0,0,0,0,0,0,31,31},
+  {0,0,0,0,0,31,31,31},
+  {0,0,0,0,31,31,31,31},
+  {0,0,0,31,31,31,31,31},
+  {0,0,31,31,31,31,31,31},
+  {0,31,31,31,31,31,31,31}
+};
+
+void plotWave() {
+
+  double minV = 9999;
+  double maxV = -9999;
+
+  for (int i = 0; i < N; i++) {
+    if (reconstructed[i] < minV) minV = reconstructed[i];
+    if (reconstructed[i] > maxV) maxV = reconstructed[i];
+  }
+
+  lcd.clear();
+
+  for (int x = 0; x < 16; x++) {
+
+    int idx = x * 2;
+    double val = reconstructed[idx];
+
+    int level = 0;
+
+    if (maxV != minV) {
+      level = (int)((val - minV) * 7 / (maxV - minV));
+    }
+
+    if (level < 0) level = 0;
+    if (level > 7) level = 7;
+
+    lcd.setCursor(x,1);
+    lcd.write(byte(level));
+  }
+
+  delay(1500);
+}
+
 void setup() {
   lcd.begin(16,2);
+
+  for (int i = 0; i < 8; i++) {
+    lcd.createChar(i, levels[i]);
+  }
 
   pinMode(MISO, OUTPUT);
   pinMode(10, INPUT_PULLUP);
@@ -44,7 +93,6 @@ void loop() {
   if (!flag) return;
   flag = false;
 
-  // ===== ORIGINAL =====
   if (stage == 0) {
     original[idx++] = data;
 
@@ -62,7 +110,6 @@ void loop() {
     return;
   }
 
-  // ===== DC =====
   if (bin_i == 0) {
     if (bytePhase == 0) {
       temp = (int16_t)data << 8;
@@ -78,7 +125,6 @@ void loop() {
     }
   }
 
-  // ===== BINS =====
   if (bin_i > 0 && bin_i < N/2) {
 
     static bool imagPart = false;
@@ -104,7 +150,6 @@ void loop() {
     }
   }
 
-  // ===== NYQUIST =====
   if (bin_i == N/2) {
     if (bytePhase == 0) {
       temp = (int16_t)data << 8;
@@ -115,13 +160,11 @@ void loop() {
       vReal[N/2] = temp;
       vImag[N/2] = 0;
 
-      // ===== SIMETRÍA =====
       for (int i = 1; i < N/2; i++) {
         vReal[N-i] = vReal[i];
         vImag[N-i] = -vImag[i];
       }
 
-      // ===== IFFT =====
       for (int k = 0; k < N; k++) {
         double sum = 0;
 
@@ -133,7 +176,6 @@ void loop() {
         reconstructed[k] = sum / (N * SCALE);
       }
 
-      // ===== AJUSTE DE GANANCIA =====
       double e0 = 0;
       double e1 = 0;
 
@@ -151,7 +193,6 @@ void loop() {
         reconstructed[i] *= gain;
       }
 
-      // ===== MÉTRICAS =====
       static double mse_avg = 0;
       static double ep_avg = 0;
       static double ser_avg = 0;
@@ -176,9 +217,8 @@ void loop() {
       double EP = (e0_final == 0) ? 0 : (mse / e0_final) * 100.0;
       double SER = (mse > 0) ? 10 * log10(e0_final / mse) : 0;
 
-      // ===== PROMEDIO =====
       mse_avg += mse;
-      ep_avg += 100-EP;
+      ep_avg += 100 - EP;
       ser_avg += SER;
       count++;
 
@@ -201,6 +241,10 @@ void loop() {
         lcd.setCursor(0,0);
         lcd.print("SER:");
         lcd.print(ser_avg / count,1);
+
+        delay(1200);
+
+        plotWave();
 
         mse_avg = 0;
         ep_avg = 0;
