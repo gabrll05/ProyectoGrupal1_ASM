@@ -1,57 +1,51 @@
-#include <SPI.h>
 #include <arduinoFFT.h>
-#include <math.h>
 
 #define N 32
-#define CS 10
-#define SAMPLING_FREQUENCY 1000
 
 double vReal[N];
 double vImag[N];
 
-ArduinoFFT<double> FFT(vReal, vImag, N, SAMPLING_FREQUENCY, false);
+ArduinoFFT<double> FFT(vReal, vImag, N, 8000);
 
-byte index = 0;
+int index = 0;
 
 void setup() {
   Serial.begin(115200);
-
-  pinMode(CS, OUTPUT);
-  digitalWrite(CS, HIGH);
-
-  SPI.begin();
+  Serial1.begin(115200);
 }
 
 void loop() {
-  if (Serial.available()) {
 
-    vReal[index] = Serial.read();
+  if (Serial.available()) {
+    vReal[index] = Serial.read() - 127;
     vImag[index] = 0;
     index++;
 
     if (index >= N) {
       index = 0;
 
-      FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
-      FFT.compute(FFT_FORWARD);
-      FFT.complexToMagnitude();
+      FFT.windowing(FFTWindow::Hamming, FFTDirection::Forward);
+      FFT.compute(FFTDirection::Forward);
 
-      digitalWrite(CS, LOW);
-      delayMicroseconds(10);
+     
+    for (int i = 1; i < N/2; i++) {
 
-      for (int i = 0; i < N / 2; i++) {
+  float gain = 1.0 / (1.0 + 0.5 * i); 
 
-        double mag = vReal[i];
-        if (mag < 1) mag = 1;
+  vReal[i] *= gain;
+  vImag[i] *= gain;
 
-        byte val = (byte)(log(mag) * 25);  
-        if (val > 255) val = 255;
+  int16_t real = (int16_t)(vReal[i] * 8);
+  int16_t imag = (int16_t)(vImag[i] * 8);
 
-        SPI.transfer(val);
-      }
+  Serial1.write(highByte(real));
+  Serial1.write(lowByte(real));
+  Serial1.write(highByte(imag));
+  Serial1.write(lowByte(imag));
+}
 
-      delayMicroseconds(10);
-      digitalWrite(CS, HIGH);
+      while (!Serial1.available());
+      Serial1.read();
     }
   }
 }
