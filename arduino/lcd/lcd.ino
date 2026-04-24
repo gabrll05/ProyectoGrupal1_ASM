@@ -4,39 +4,34 @@
 
 LiquidCrystal lcd(2,3,4,5,6,7);
 
-#define BINS 16
-#define PWM_PIN 9
+#define N 32
+#define SCALE 8
 
 volatile byte data;
 volatile bool flag = false;
 
-byte spectrum[BINS];
-byte idx = 0;
+byte original[N];
+double vReal[N];
+double vImag[N];
+double reconstructed[N];
 
-byte bars[8][8] = {
-  {0,0,0,0,0,0,0,0},
-  {0,0,0,0,0,0,0,31},
-  {0,0,0,0,0,0,31,31},
-  {0,0,0,0,0,31,31,31},
-  {0,0,0,0,31,31,31,31},
-  {0,0,0,31,31,31,31,31},
-  {0,0,31,31,31,31,31,31},
-  {0,31,31,31,31,31,31,31}
-};
+int idx = 0;
+int stage = 0;
 
-float phase1 = 0;
-float phase2 = 0;
+int bytePhase = 0;
+int bin_i = 0;
+int16_t temp = 0;
 
 void setup() {
   lcd.begin(16,2);
-  for (int i = 0; i < 8; i++) lcd.createChar(i, bars[i]);
 
   pinMode(MISO, OUTPUT);
   pinMode(10, INPUT_PULLUP);
-  pinMode(PWM_PIN, OUTPUT);
 
   SPCR = _BV(SPE);
   SPI.attachInterrupt();
+
+  lcd.print("RUN");
 }
 
 ISR(SPI_STC_vect) {
@@ -46,62 +41,176 @@ ISR(SPI_STC_vect) {
 
 void loop() {
 
-  if (flag) {
-    spectrum[idx++] = data;
+  if (!flag) return;
+  flag = false;
 
-    if (idx >= BINS) {
+  // ===== ORIGINAL =====
+  if (stage == 0) {
+    original[idx++] = data;
+
+    if (idx >= N) {
       idx = 0;
+      stage = 1;
+      bytePhase = 0;
+      bin_i = 0;
 
-      byte maxVal = 1;
-      int maxIndex = 0;
-      int secondIndex = 1;
-
-      for (int i = 0; i < 16; i++) {
-        if (spectrum[i] > maxVal) {
-          maxVal = spectrum[i];
-          maxIndex = i;
-        }
-      }
-
-      for (int i = 0; i < 16; i++) {
-        if (i != maxIndex && spectrum[i] > spectrum[secondIndex]) {
-          secondIndex = i;
-        }
-      }
-
-      for (int i = 0; i < 16; i++) {
-        byte level = (spectrum[i] * 15) / maxVal;
-
-        byte bottom = min(level, 7);
-        byte top = (level > 7) ? (level - 7) : 0;
-
-        lcd.setCursor(i, 1);
-        lcd.write(bottom);
-        lcd.setCursor(i, 0);
-        lcd.write(top);
-      }
-
-      float freq1 = maxIndex * 50.0;
-      float freq2 = secondIndex * 50.0;
-
-      for (int t = 0; t < 100; t++) {
-        float sample =
-          100 * sin(phase1) +
-          80 * sin(phase2);
-
-        int pwm = (int)(127 + sample);
-        if (pwm < 0) pwm = 0;
-        if (pwm > 255) pwm = 255;
-
-        analogWrite(PWM_PIN, pwm);
-
-        phase1 += 2 * PI * freq1 / 8000.0;
-        phase2 += 2 * PI * freq2 / 8000.0;
-
-        delayMicroseconds(125);
+      for (int i = 0; i < N; i++) {
+        vReal[i] = 0;
+        vImag[i] = 0;
       }
     }
+    return;
+  }
 
-    flag = false;
+  // ===== DC =====
+  if (bin_i == 0) {
+    if (bytePhase == 0) {
+      temp = (int16_t)data << 8;
+      bytePhase = 1;
+      return;
+    } else {
+      temp |= data;
+      vReal[0] = temp;
+      vImag[0] = 0;
+      bytePhase = 0;
+      bin_i = 1;
+      return;
+    }
+  }
+
+  // ===== BINS =====
+  if (bin_i > 0 && bin_i < N/2) {
+
+    static bool imagPart = false;
+
+    if (bytePhase == 0) {
+      temp = (int16_t)data << 8;
+      bytePhase = 1;
+      return;
+    } else {
+      temp |= data;
+
+      if (!imagPart) {
+        vReal[bin_i] = temp;
+        imagPart = true;
+      } else {
+        vImag[bin_i] = temp;
+        imagPart = false;
+        bin_i++;
+      }
+
+      bytePhase = 0;
+      return;
+    }
+  }
+
+  // ===== NYQUIST =====
+  if (bin_i == N/2) {
+    if (bytePhase == 0) {
+      temp = (int16_t)data << 8;
+      bytePhase = 1;
+      return;
+    } else {
+      temp |= data;
+      vReal[N/2] = temp;
+      vImag[N/2] = 0;
+
+      // ===== SIMETRÍA =====
+      for (int i = 1; i < N/2; i++) {
+        vReal[N-i] = vReal[i];
+        vImag[N-i] = -vImag[i];
+      }
+
+      // ===== IFFT =====
+      for (int k = 0; k < N; k++) {
+        double sum = 0;
+
+        for (int n = 0; n < N; n++) {
+          double ang = 2 * PI * k * n / N;
+          sum += vReal[n]*cos(ang) - vImag[n]*sin(ang);
+        }
+
+        reconstructed[k] = sum / (N * SCALE);
+      }
+
+      // ===== AJUSTE DE GANANCIA =====
+      double e0 = 0;
+      double e1 = 0;
+
+      for (int i = 0; i < N; i++) {
+        double o = original[i] - 127;
+        double r = reconstructed[i];
+
+        e0 += o * o;
+        e1 += r * r;
+      }
+
+      double gain = (e1 > 0) ? sqrt(e0 / e1) : 1.0;
+
+      for (int i = 0; i < N; i++) {
+        reconstructed[i] *= gain;
+      }
+
+      // ===== MÉTRICAS =====
+      static double mse_avg = 0;
+      static double ep_avg = 0;
+      static double ser_avg = 0;
+      static int count = 0;
+
+      double mse = 0;
+      double e0_final = 0;
+
+      for (int i = 0; i < N; i++) {
+
+        double o = original[i] - 127;
+        double r = reconstructed[i];
+
+        double err = o - r;
+
+        mse += err * err;
+        e0_final += o * o;
+      }
+
+      mse /= N;
+
+      double EP = (e0_final == 0) ? 0 : (mse / e0_final) * 100.0;
+      double SER = (mse > 0) ? 10 * log10(e0_final / mse) : 0;
+
+      // ===== PROMEDIO =====
+      mse_avg += mse;
+      ep_avg += 100-EP;
+      ser_avg += SER;
+      count++;
+
+      if (count >= 10) {
+
+        lcd.clear();
+
+        lcd.setCursor(0,0);
+        lcd.print("MSE:");
+        lcd.print(mse_avg / count,0);
+
+        lcd.setCursor(0,1);
+        lcd.print("EP:");
+        lcd.print(ep_avg / count,1);
+        lcd.print("%");
+
+        delay(1200);
+
+        lcd.clear();
+        lcd.setCursor(0,0);
+        lcd.print("SER:");
+        lcd.print(ser_avg / count,1);
+
+        mse_avg = 0;
+        ep_avg = 0;
+        ser_avg = 0;
+        count = 0;
+      }
+
+      stage = 0;
+      bin_i = 0;
+      bytePhase = 0;
+    }
   }
 }

@@ -6,7 +6,7 @@ PORT = '/dev/ttyACM0'
 BAUD = 115200
 SR = 8000
 BLOCK = 32
-FREQ = 200
+FREQ = 500  # frecuencia limpia (bin exacto)
 
 ser = serial.Serial(PORT, BAUD, timeout=1)
 time.sleep(2)
@@ -16,15 +16,7 @@ def gen_tone(freq, duration):
     wave = np.sin(2 * np.pi * freq * t)
     return (wave * 40 + 127).astype(np.uint8)
 
-def gen_silence(duration):
-    samples = int(duration * SR)
-    return np.ones(samples, dtype=np.uint8) * 127
-
-
-audio = np.concatenate([
-    gen_tone(FREQ, 0.1),
-    gen_silence(0.1)
-])
+audio = gen_tone(FREQ, 5)  # 5 segundos continuo
 
 i = 0
 
